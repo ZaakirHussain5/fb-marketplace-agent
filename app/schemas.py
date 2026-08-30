@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
@@ -27,6 +30,7 @@ class SearchLocationCreate(BaseModel):
 
 
 class SearchCreate(BaseModel):
+    agent_id: int | None = None
     name: str
     category: str | None = None
     keywords: list[str] = Field(default_factory=list)
@@ -44,6 +48,7 @@ class SearchLocationRead(SearchLocationCreate):
 
 class SearchRead(BaseModel):
     id: int
+    agent_id: int | None
     name: str
     category: str | None
     keywords: list[str]
@@ -53,6 +58,41 @@ class SearchRead(BaseModel):
     enabled: bool
     notify_threshold: int
     locations: list[SearchLocationRead]
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgentCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    phone_number: str = Field(min_length=8, max_length=32)
+    instructions: str = ""
+    enabled: bool = True
+    schedule_minutes: int = Field(default=30, ge=5, le=1440)
+    notify_threshold: int = Field(default=80, ge=0, le=100)
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    phone_number: str | None = Field(default=None, min_length=8, max_length=32)
+    instructions: str | None = None
+    enabled: bool | None = None
+    schedule_minutes: int | None = Field(default=None, ge=5, le=1440)
+    notify_threshold: int | None = Field(default=None, ge=0, le=100)
+    filters: dict[str, Any] | None = None
+
+
+class AgentRead(BaseModel):
+    id: int
+    name: str
+    phone_number: str
+    instructions: str
+    enabled: bool
+    schedule_minutes: int
+    notify_threshold: int
+    filters: dict[str, Any]
+    last_run_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
 
