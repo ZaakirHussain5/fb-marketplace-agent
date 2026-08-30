@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -19,10 +19,30 @@ class Agent(Base):
     notify_threshold: Mapped[int] = mapped_column(Integer, default=80)
     filters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    searches: Mapped[list["SavedSearch"]] = relationship(back_populates="agent")
+    searches: Mapped[list["SavedSearch"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
+    runs: Mapped[list["AgentRun"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), index=True)
+    trigger: Mapped[str] = mapped_column(String(32), default="scheduled")
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    collected: Mapped[int] = mapped_column(Integer, default=0)
+    matched: Mapped[int] = mapped_column(Integer, default=0)
+    notified: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    agent: Mapped[Agent] = relationship(back_populates="runs")
 
 
 class SavedSearch(Base):
@@ -41,9 +61,7 @@ class SavedSearch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     agent: Mapped[Agent | None] = relationship(back_populates="searches")
-    locations: Mapped[list["SearchLocation"]] = relationship(
-        back_populates="search", cascade="all, delete-orphan"
-    )
+    locations: Mapped[list["SearchLocation"]] = relationship(back_populates="search", cascade="all, delete-orphan")
 
 
 class SearchLocation(Base):
@@ -88,13 +106,17 @@ class Listing(Base):
 
 class ListingMatch(Base):
     __tablename__ = "listing_matches"
+    __table_args__ = (UniqueConstraint("search_id", "listing_id", name="uq_search_listing"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    search_id: Mapped[int] = mapped_column(ForeignKey("saved_searches.id", ondelete="CASCADE"))
-    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"))
+    search_id: Mapped[int] = mapped_column(ForeignKey("saved_searches.id", ondelete="CASCADE"), index=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True, index=True)
     score: Mapped[int] = mapped_column(Integer, default=0)
     reasons: Mapped[list[str]] = mapped_column(JSON, default=list)
     risks: Mapped[list[str]] = mapped_column(JSON, default=list)
     should_notify: Mapped[bool] = mapped_column(Boolean, default=False)
+    delivery_status: Mapped[str] = mapped_column(String(32), default="not_requested")
+    delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
