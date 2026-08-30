@@ -42,9 +42,11 @@ class SearchPipeline:
             if existing_match:
                 continue
 
-            score, reasons, risks, should_notify = self.scorer.score(listing, search)
-            if agent and agent.instructions:
-                reasons = reasons + [f"Agent instruction applied: {agent.instructions[:180]}"]
+            score, reasons, risks, should_notify = self.scorer.score(
+                listing,
+                search,
+                instructions=agent.instructions if agent else "",
+            )
             threshold = agent.notify_threshold if agent else search.notify_threshold
             should_notify = bool(should_notify and score >= threshold)
 
