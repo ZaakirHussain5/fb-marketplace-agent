@@ -11,6 +11,7 @@ on:
     paths:
       - "apps/web/**"
       - "package.json"
+      - ".github/workflows/web.yml"
 
 jobs:
   build:
@@ -20,6 +21,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
       - run: npm install
       - run: npm run build:web
