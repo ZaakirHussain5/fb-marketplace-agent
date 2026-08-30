@@ -11,12 +11,18 @@ class ListingScorer:
         self.settings = get_settings()
         self.client = OpenAI(api_key=self.settings.openai_api_key) if self.settings.openai_api_key else None
 
-    def score(self, listing: Listing, search: SavedSearch) -> tuple[int, list[str], list[str], bool]:
+    def score(
+        self,
+        listing: Listing,
+        search: SavedSearch,
+        instructions: str = "",
+    ) -> tuple[int, list[str], list[str], bool]:
         if not self.client:
-            return self._fallback_score(listing, search)
+            return self._fallback_score(listing, search, instructions)
 
         prompt = {
-            "task": "Score how strongly this marketplace listing matches the saved search. Be conservative.",
+            "task": "Score how strongly this marketplace listing matches the saved search and agent instructions. Be conservative and never invent missing listing facts.",
+            "agent_instructions": instructions,
             "search": {
                 "name": search.name,
                 "category": search.category,
@@ -35,34 +41,36 @@ class ListingScorer:
             },
             "output": {
                 "score": "integer 0-100",
-                "reasons": "array of short strings",
+                "reasons": "array of short strings grounded in listing data",
                 "risks": "array of short strings",
             },
         }
-        response = self.client.responses.create(
-            model=self.settings.openai_model,
-            input=json.dumps(prompt),
-        )
+        response = self.client.responses.create(model=self.settings.openai_model, input=json.dumps(prompt))
         try:
             data = json.loads(response.output_text)
             score = max(0, min(100, int(data.get("score", 0))))
             reasons = [str(item) for item in data.get("reasons", [])][:5]
             risks = [str(item) for item in data.get("risks", [])][:5]
         except (ValueError, TypeError, json.JSONDecodeError):
-            return self._fallback_score(listing, search)
+            return self._fallback_score(listing, search, instructions)
         return score, reasons, risks, score >= search.notify_threshold
 
     @staticmethod
-    def _fallback_score(listing: Listing, search: SavedSearch) -> tuple[int, list[str], list[str], bool]:
+    def _fallback_score(
+        listing: Listing,
+        search: SavedSearch,
+        instructions: str = "",
+    ) -> tuple[int, list[str], list[str], bool]:
         score = 70
         reasons = ["Passed deterministic location, keyword, category, and price filters"]
         risks: list[str] = []
         haystack = f"{listing.title} {listing.description or ''}".casefold()
         keyword_hits = sum(1 for word in search.keywords if word.casefold() in haystack)
         score += min(20, keyword_hits * 5)
-        if listing.price is not None and search.max_price is not None:
-            if float(listing.price) <= float(search.max_price) * 0.9:
-                score += 5
-                reasons.append("Price is comfortably below the configured maximum")
+        if listing.price is not None and search.max_price is not None and float(listing.price) <= float(search.max_price) * 0.9:
+            score += 5
+            reasons.append("Price is comfortably below the configured maximum")
+        if instructions:
+            risks.append("AI credentials are not configured, so natural-language instructions were not semantically evaluated")
         score = min(score, 100)
         return score, reasons, risks, score >= search.notify_threshold

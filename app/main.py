@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
@@ -5,21 +7,24 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.collectors.mock import MockCollector
 from app.db import Base, engine, get_db
-from app.models import Agent, Listing, SavedSearch, SearchLocation
+from app.models import Agent, AgentRun, Listing, ListingMatch, SavedSearch, SearchLocation
 from app.schemas import (
     AgentCreate,
     AgentRead,
+    AgentRunRead,
     AgentUpdate,
     ListingRead,
+    MatchRead,
     SearchCreate,
     SearchRead,
     SearchRunResult,
 )
+from app.services.orchestrator import AgentOrchestrator
 from app.services.pipeline import SearchPipeline
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Marketplace Deal Agent", version="0.2.0")
+app = FastAPI(title="Marketplace Deal Agent", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -31,12 +36,12 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "orchestrator": "ready"}
 
 
 @app.post("/api/v1/agents", response_model=AgentRead)
 def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
-    agent = Agent(**payload.model_dump())
+    agent = Agent(**payload.model_dump(), next_run_at=datetime.utcnow() if payload.enabled else None)
     db.add(agent)
     db.commit()
     db.refresh(agent)
@@ -61,8 +66,13 @@ def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depends(get_
     agent = db.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    for key, value in changes.items():
         setattr(agent, key, value)
+    if changes.get("enabled") is True and agent.next_run_at is None:
+        agent.next_run_at = datetime.utcnow()
+    if changes.get("enabled") is False:
+        agent.next_run_at = None
     db.commit()
     db.refresh(agent)
     return agent
@@ -76,6 +86,44 @@ def delete_agent(agent_id: int, db: Session = Depends(get_db)):
     db.delete(agent)
     db.commit()
     return {"deleted": True}
+
+
+@app.post("/api/v1/agents/{agent_id}/run", response_model=AgentRunRead)
+def run_agent(agent_id: int, db: Session = Depends(get_db)):
+    agent = db.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return AgentOrchestrator().run_agent(db, agent, trigger="manual")
+
+
+@app.get("/api/v1/agents/{agent_id}/runs", response_model=list[AgentRunRead])
+def list_agent_runs(agent_id: int, db: Session = Depends(get_db)):
+    if not db.get(Agent, agent_id):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return list(db.scalars(select(AgentRun).where(AgentRun.agent_id == agent_id).order_by(AgentRun.created_at.desc()).limit(100)).all())
+
+
+@app.get("/api/v1/runs", response_model=list[AgentRunRead])
+def list_runs(status: str | None = None, db: Session = Depends(get_db)):
+    stmt = select(AgentRun)
+    if status:
+        stmt = stmt.where(AgentRun.status == status)
+    return list(db.scalars(stmt.order_by(AgentRun.created_at.desc()).limit(200)).all())
+
+
+@app.get("/api/v1/agents/{agent_id}/matches", response_model=list[MatchRead])
+def list_agent_matches(agent_id: int, db: Session = Depends(get_db)):
+    if not db.get(Agent, agent_id):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    rows = db.execute(
+        select(ListingMatch, Listing)
+        .join(Listing, Listing.id == ListingMatch.listing_id)
+        .join(SavedSearch, SavedSearch.id == ListingMatch.search_id)
+        .where(SavedSearch.agent_id == agent_id)
+        .order_by(ListingMatch.created_at.desc())
+        .limit(200)
+    ).all()
+    return [MatchRead(**{**match.__dict__, "listing": ListingRead.model_validate(listing)}) for match, listing in rows]
 
 
 @app.post("/api/v1/searches", response_model=SearchRead)
@@ -109,24 +157,13 @@ def list_searches(agent_id: int | None = None, db: Session = Depends(get_db)):
     return db.scalars(stmt.order_by(SavedSearch.created_at.desc())).all()
 
 
-@app.get("/api/v1/searches/{search_id}", response_model=SearchRead)
-def get_search(search_id: int, db: Session = Depends(get_db)):
-    search = db.scalar(
-        select(SavedSearch).where(SavedSearch.id == search_id).options(selectinload(SavedSearch.locations))
-    )
-    if not search:
-        raise HTTPException(status_code=404, detail="Search not found")
-    return search
-
-
 @app.post("/api/v1/searches/{search_id}/run", response_model=SearchRunResult)
 def run_search(search_id: int, db: Session = Depends(get_db)):
-    search = db.scalar(
-        select(SavedSearch).where(SavedSearch.id == search_id).options(selectinload(SavedSearch.locations))
-    )
+    search = db.scalar(select(SavedSearch).where(SavedSearch.id == search_id).options(selectinload(SavedSearch.locations)))
     if not search:
         raise HTTPException(status_code=404, detail="Search not found")
-    return SearchPipeline(MockCollector()).run(db, search)
+    agent = db.get(Agent, search.agent_id) if search.agent_id else None
+    return SearchPipeline(MockCollector()).run(db, search, agent=agent)
 
 
 @app.get("/api/v1/listings", response_model=list[ListingRead])
