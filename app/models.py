@@ -7,10 +7,29 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 
+class Agent(Base):
+    __tablename__ = "agents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    phone_number: Mapped[str] = mapped_column(String(32))
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    schedule_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    notify_threshold: Mapped[int] = mapped_column(Integer, default=80)
+    filters: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    searches: Mapped[list["SavedSearch"]] = relationship(back_populates="agent")
+
+
 class SavedSearch(Base):
     __tablename__ = "saved_searches"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    agent_id: Mapped[int | None] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -21,6 +40,7 @@ class SavedSearch(Base):
     notify_threshold: Mapped[int] = mapped_column(Integer, default=80)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    agent: Mapped[Agent | None] = relationship(back_populates="searches")
     locations: Mapped[list["SearchLocation"]] = relationship(
         back_populates="search", cascade="all, delete-orphan"
     )
