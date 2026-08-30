@@ -17,7 +17,7 @@ class SearchLocationCreate(BaseModel):
     @classmethod
     def us_only(cls, value: str) -> str:
         if value.upper() != "US":
-            raise ValueError("Only US locations are supported in the MVP")
+            raise ValueError("Only US locations are supported")
         return "US"
 
     @field_validator("state_code")
@@ -91,8 +91,24 @@ class AgentRead(BaseModel):
     notify_threshold: int
     filters: dict[str, Any]
     last_run_at: datetime | None
+    next_run_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgentRunRead(BaseModel):
+    id: int
+    agent_id: int
+    trigger: str
+    status: str
+    collected: int
+    matched: int
+    notified: int
+    error: str | None
+    started_at: datetime | None
+    finished_at: datetime | None
+    created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -109,6 +125,22 @@ class ListingRead(BaseModel):
     city: str | None
     postal_code: str | None
     model_config = ConfigDict(from_attributes=True)
+
+
+class MatchRead(BaseModel):
+    id: int
+    search_id: int
+    listing_id: int
+    run_id: int | None
+    score: int
+    reasons: list[str]
+    risks: list[str]
+    should_notify: bool
+    delivery_status: str
+    delivery_error: str | None
+    notified_at: datetime | None
+    created_at: datetime
+    listing: ListingRead
 
 
 class SearchRunResult(BaseModel):
