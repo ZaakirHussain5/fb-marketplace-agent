@@ -13,16 +13,18 @@ fb-marketplace-agent/
 ├── app/                     # FastAPI service
 │   ├── collectors/          # Replaceable listing collectors
 │   ├── services/            # filtering, AI, notifications, pipeline
+│   ├── init_db.py           # one-shot DB schema initialization
 │   ├── main.py
 │   ├── models.py
 │   └── schemas.py
+├── scripts/
+│   └── smoke.sh             # local API/UI smoke test
 ├── tests/                   # backend tests
 ├── package.json             # npm workspace root
 ├── pyproject.toml           # Python service dependencies
-└── docker-compose.yml       # Postgres + API + web
+├── Makefile                 # local Docker shortcuts
+└── docker-compose.yml       # Postgres + migration + API + worker + web
 ```
-
-The repo is a heterogeneous monorepo: the Next.js application is managed through the root npm workspace and the FastAPI service uses the root Python project.
 
 ## Multi-agent management
 
@@ -40,9 +42,102 @@ The Next.js UI at `http://localhost:3000` provides:
 - city and radius filtering
 - polling cadence
 - AI notification score threshold
-- quick agent search
 
-Each agent persists fields similar to:
+## Local Docker setup
+
+A fresh clone runs without creating an `.env` file. Safe local defaults are built into `docker-compose.yml`.
+
+```bash
+git clone https://github.com/ZaakirHussain5/fb-marketplace-agent.git
+cd fb-marketplace-agent
+docker compose up --build
+```
+
+Or run detached:
+
+```bash
+make up
+```
+
+Then open:
+
+- Web UI: `http://localhost:3000`
+- FastAPI docs: `http://localhost:8000/docs`
+- Health endpoint: `http://localhost:8000/health`
+- PostgreSQL: `localhost:5432`
+
+The Docker stack starts in this order:
+
+```text
+PostgreSQL healthy
+      ↓
+migrate (creates schema once)
+      ↓
+FastAPI + scheduler worker
+      ↓
+FastAPI healthy
+      ↓
+Next.js web UI
+```
+
+### Verify the local stack
+
+```bash
+make ps
+make smoke
+```
+
+`make smoke` checks the API, checks the web UI, and creates a sample San Diego saved search.
+
+Useful commands:
+
+```bash
+make up       # build and start in background
+make logs     # follow logs
+make ps       # show container status
+make down     # stop containers
+make restart  # rebuild/restart
+make config   # render/validate Compose configuration
+make clean    # stop and delete local DB volume
+```
+
+## Optional local configuration
+
+The application runs with the mock listing collector and without OpenAI or WhatsApp credentials.
+
+If you want to customize ports or enable integrations:
+
+```bash
+cp .env.example .env
+```
+
+Important variables:
+
+```dotenv
+API_PORT=8000
+WEB_PORT=3000
+POSTGRES_PORT=5432
+
+POSTGRES_DB=marketplace
+POSTGRES_USER=marketplace
+POSTGRES_PASSWORD=marketplace
+DATABASE_URL=postgresql+psycopg://marketplace:marketplace@db:5432/marketplace
+
+COLLECTOR_PROVIDER=mock
+
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5-mini
+AI_NOTIFY_THRESHOLD=80
+
+WHATSAPP_ACCESS_TOKEN=
+WHATSAPP_PHONE_NUMBER_ID=
+WHATSAPP_RECIPIENT=
+META_GRAPH_VERSION=v23.0
+```
+
+Do not commit a populated `.env` file.
+
+## Example agent
 
 ```json
 {
@@ -77,31 +172,24 @@ Each agent persists fields similar to:
 - `GET /api/v1/agents/{id}`
 - `PATCH /api/v1/agents/{id}`
 - `DELETE /api/v1/agents/{id}`
+- `POST /api/v1/agents/{id}/run`
+- `GET /api/v1/agents/{id}/runs`
+- `GET /api/v1/agents/{id}/matches`
 - `POST /api/v1/searches`
 - `GET /api/v1/searches?agent_id=<id>`
 - `POST /api/v1/searches/{id}/run`
 - `GET /api/v1/listings`
 
-## Run locally
+## Non-Docker development
 
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-Then open:
-
-- Web UI: `http://localhost:3000`
-- FastAPI docs: `http://localhost:8000/docs`
-
-For frontend-only development:
+Frontend:
 
 ```bash
 npm install
 npm run dev:web
 ```
 
-For backend tests:
+Backend tests:
 
 ```bash
 python -m venv .venv
@@ -119,7 +207,7 @@ FastAPI agent/search API
         ↓
 PostgreSQL
         ↓
-Scheduler / queue
+Scheduler worker
         ↓
 Marketplace collector provider
         ↓
@@ -130,7 +218,7 @@ AI scoring + instructions
 WhatsApp Cloud API
 ```
 
-Location, price, category and keyword filters should remain deterministic. AI is used after those filters for ranking, interpretation and agent-specific instructions.
+Location, price, category and keyword filters remain deterministic. AI is used after those filters for ranking, interpretation and agent-specific instructions.
 
 ## Current collection mode
 
